@@ -9,9 +9,16 @@ namespace GLTF.Schema
 	public class GLTFProperty
 	{
 		private static Dictionary<string, ExtensionFactory> _extensionRegistry = new Dictionary<string, ExtensionFactory>();
+
+		private static ExtensionFactory[] supportedExtensions =
+		{
+			new KHR_materials_pbrSpecularGlossinessExtensionFactory(),
+			new ExtTextureTransformExtensionFactory(),
+			new MSFT_packing_normalRoughnessMetallic_factory(),
+			new MSFT_texture_dds_factory(),
+		};
+
 		private static DefaultExtensionFactory _defaultExtensionFactory = new DefaultExtensionFactory();
-		private static KHR_materials_pbrSpecularGlossinessExtensionFactory _KHRExtensionFactory = new KHR_materials_pbrSpecularGlossinessExtensionFactory();
-		private static ExtTextureTransformExtensionFactory _TexTransformFactory = new ExtTextureTransformExtensionFactory();
 
 		public static void RegisterExtension(ExtensionFactory extensionFactory)
 		{
@@ -136,17 +143,23 @@ namespace GLTF.Schema
 				{
 					extensionsCollection.Add(extensionName, extensionFactory.Deserialize(root, childAsJProperty));
 				}
-				else if (extensionName.Equals(KHR_materials_pbrSpecularGlossinessExtensionFactory.EXTENSION_NAME))
-				{
-					extensionsCollection.Add(extensionName, _KHRExtensionFactory.Deserialize(root, childAsJProperty));
-				}
-				else if (extensionName.Equals(ExtTextureTransformExtensionFactory.EXTENSION_NAME))
-				{
-					extensionsCollection.Add(extensionName, _TexTransformFactory.Deserialize(root, childAsJProperty));
-				}
 				else
 				{
-					extensionsCollection.Add(extensionName, _defaultExtensionFactory.Deserialize(root, childAsJProperty));
+					bool found = false;
+					foreach (ExtensionFactory ef in supportedExtensions)
+					{
+						if(extensionName.Equals(ef.ExtensionName))
+						{
+							extensionsCollection.Add(extensionName, ef.Deserialize(root, childAsJProperty));
+							found = true;
+							break;
+						}
+					}
+
+					if(!found)
+					{
+						extensionsCollection.Add(extensionName, _defaultExtensionFactory.Deserialize(root, childAsJProperty));
+					}
 				}
 			}
 

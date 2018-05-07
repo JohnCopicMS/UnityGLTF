@@ -205,6 +205,7 @@ namespace UnityGLTF
             instantiatedGltfObject.CachedData.MeshCache = _assetCache.MeshCache;
             instantiatedGltfObject.CachedData.TextureCache = _assetCache.TextureCache;
         }
+
         private IEnumerator ConstructBufferData(Node node)
         {
             GLTF.Schema.MeshId mesh = node.Mesh;
@@ -246,10 +247,6 @@ namespace UnityGLTF
                 if (_assetCache.MeshCache[meshIdIndex][i].MeshAttributes.Count == 0)
                 {
                     yield return ConstructMeshAttributes(primitive, meshIdIndex, i);
-                    if (primitive.Material != null)
-                    {
-                        yield return ConstructMaterialImageBuffers(primitive.Material.Value);
-                    }
                 }
             }
         }
@@ -349,18 +346,6 @@ namespace UnityGLTF
                     }
                 }
 
-                if (_gltfRoot.Textures != null)
-                {
-                    for (int i = 0; i < _gltfRoot.Textures.Count; ++i)
-                    {
-                        if (_assetCache.TextureCache[i] == null)
-                        {
-                            GLTF.Schema.Texture texture = _gltfRoot.Textures[i];
-                            yield return ConstructImageBuffer(texture, i);
-                            yield return ConstructImage(texture.Source.Value, texture.Source.Id);
-                        }
-                    }
-                }
                 yield return ConstructAttributesForMeshes();
             }
 
@@ -404,13 +389,13 @@ namespace UnityGLTF
             }
         }
 
-        protected IEnumerator ConstructImage(GLTF.Schema.Image image, int imageCacheIndex, bool markGpuOnly = true)
+        protected IEnumerator ConstructImage(GLTF.Schema.Image image, int imageCacheIndex, bool markGpuOnly = true, bool useLinear = true)
         {
             if (_assetCache.ImageCache[imageCacheIndex] == null)
             {
                 if (image.BufferView != null)
                 {
-                    yield return ConstructImageFromGLB(image, imageCacheIndex);
+                    yield return ConstructImageFromGLB(image, imageCacheIndex, useLinear);
                 }
                 else
                 {
@@ -420,7 +405,7 @@ namespace UnityGLTF
                     URIHelper.TryParseBase64(uri, out bufferData);
                     if (bufferData != null)
                     {
-                        Texture2D loadedTexture = new Texture2D(0, 0);
+                        Texture2D loadedTexture = new Texture2D(0, 0, TextureFormat.RGBA32, true, useLinear);
                         loadedTexture.LoadImage(bufferData, true);
 
                         _assetCache.ImageCache[imageCacheIndex] = loadedTexture;
@@ -429,7 +414,14 @@ namespace UnityGLTF
                     else
                     {
                         Stream stream = _assetCache.ImageStreamCache[imageCacheIndex];
-                        yield return ConstructUnityTexture(stream, markGpuOnly, image, imageCacheIndex);
+                        if (IsDds(image))
+                        {
+                            yield return ConstructUnityDDSTexture(stream, markGpuOnly, image, imageCacheIndex, useLinear);
+                        }
+                        else
+                        {
+                            yield return ConstructUnityTexture(stream, markGpuOnly, image, imageCacheIndex, useLinear);
+                        }
                     }
                 }
             }
@@ -441,9 +433,9 @@ namespace UnityGLTF
         /// <param name="stream"></param>
         /// <param name="markGpuOnly">Non-readable textures are saved only on the GPU and take up half as much memory.</param>
         /// <returns></returns>
-        protected virtual IEnumerator ConstructUnityTexture(Stream stream, bool markGpuOnly, GLTF.Schema.Image image, int imageCacheIndex)
+        protected virtual IEnumerator ConstructUnityTexture(Stream stream, bool markGpuOnly, GLTF.Schema.Image image, int imageCacheIndex, bool linear = true)
         {
-            Texture2D texture = new Texture2D(0, 0);
+            Texture2D texture = new Texture2D(0, 0, TextureFormat.RGBA32, true, linear);
 
             if (stream is MemoryStream)
             {
@@ -499,10 +491,6 @@ namespace UnityGLTF
                     _assetCache.MeshCache[i][j] = new MeshCacheData();
                     var primitive = mesh.Primitives[j];
                     yield return ConstructMeshAttributes(primitive, i, j);
-                    if (primitive.Material != null)
-                    {
-                        yield return ConstructMaterialImageBuffers(primitive.Material.Value);
-                    }
                 }
             }
         }
@@ -848,7 +836,7 @@ namespace UnityGLTF
             {
                 foreach (var child in node.Children)
                 {
-                    // todo blgross: replace with an iterartive solution
+                    // todo blgross: replace with an iterative solution
                     yield return ConstructNode(child.Value, child.Id);
                     GameObject childObj = _assetCache.NodeCache[child.Id];
                     childObj.transform.SetParent(nodeObj.transform, false);
@@ -1038,74 +1026,7 @@ namespace UnityGLTF
             if ((shouldUseDefaultMaterial && _defaultLoadedMaterial == null) ||
                 (!shouldUseDefaultMaterial && _assetCache.MaterialCache[materialIndex] == null))
             {
-                yield return ConstructMaterialTextures(materialToLoad);
-                ConstructMaterial(materialToLoad, materialIndex);
-            }
-        }
-
-        protected virtual IEnumerator ConstructMaterialImageBuffers(GLTF.Schema.Material def)
-        {
-            if (def.PbrMetallicRoughness != null)
-            {
-                var pbr = def.PbrMetallicRoughness;
-
-                if (pbr.BaseColorTexture != null)
-                {
-                    var textureId = pbr.BaseColorTexture.Index;
-                    yield return ConstructImageBuffer(textureId.Value, textureId.Id);
-                }
-                if (pbr.MetallicRoughnessTexture != null)
-                {
-                    var textureId = pbr.MetallicRoughnessTexture.Index;
-
-                    yield return ConstructImageBuffer(textureId.Value, textureId.Id);
-                }
-            }
-
-            if (def.CommonConstant != null)
-            {
-                if (def.CommonConstant.LightmapTexture != null)
-                {
-                    var textureId = def.CommonConstant.LightmapTexture.Index;
-
-                    yield return ConstructImageBuffer(textureId.Value, textureId.Id);
-                }
-            }
-
-            if (def.NormalTexture != null)
-            {
-                var textureId = def.NormalTexture.Index;
-                yield return ConstructImageBuffer(textureId.Value, textureId.Id);
-            }
-
-            if (def.OcclusionTexture != null)
-            {
-                var textureId = def.OcclusionTexture.Index;
-
-                if (!(def.PbrMetallicRoughness != null
-                        && def.PbrMetallicRoughness.MetallicRoughnessTexture != null
-                        && def.PbrMetallicRoughness.MetallicRoughnessTexture.Index.Id == textureId.Id))
-                {
-                    yield return ConstructImageBuffer(textureId.Value, textureId.Id);
-                }
-            }
-
-            if (def.EmissiveTexture != null)
-            {
-                var textureId = def.EmissiveTexture.Index;
-                yield return ConstructImageBuffer(textureId.Value, textureId.Id);
-            }
-        }
-
-        protected virtual IEnumerator ConstructMaterialTextures(GLTF.Schema.Material def)
-        {
-            for (int i = 0; i < _assetCache.TextureCache.Length; ++i)
-            {
-                TextureCacheData textureCacheData = _assetCache.TextureCache[i];
-                if (textureCacheData != null && textureCacheData.Texture == null)
-                {
-                    yield return ConstructTexture(textureCacheData.TextureDefinition, i, true);
-                }
+                yield return ConstructMaterial(materialToLoad, materialIndex);
             }
         }
 
@@ -1115,18 +1036,18 @@ namespace UnityGLTF
             var meshAttributes = meshConstructionData.MeshAttributes;
             var vertexCount = primitive.Attributes[SemanticProperties.POSITION].Value.Count;
 
-			// todo optimize: There are multiple copies being performed to turn the buffer data into mesh data. Look into reducing them
-			UnityEngine.Mesh mesh = new UnityEngine.Mesh
-			{
+            // todo optimize: There are multiple copies being performed to turn the buffer data into mesh data. Look into reducing them
+            UnityEngine.Mesh mesh = new UnityEngine.Mesh
+            {
 #if UNITY_2017_3_OR_NEWER
-				indexFormat = vertexCount > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16,
+                indexFormat = vertexCount > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16,
 #endif
-				vertices = primitive.Attributes.ContainsKey(SemanticProperties.POSITION)
-					? meshAttributes[SemanticProperties.POSITION].AccessorContent.AsVertices.ToUnityVector3Raw()
-					: null,
-				normals = primitive.Attributes.ContainsKey(SemanticProperties.NORMAL)
-					? meshAttributes[SemanticProperties.NORMAL].AccessorContent.AsNormals.ToUnityVector3Raw()
-					: null,
+                vertices = primitive.Attributes.ContainsKey(SemanticProperties.POSITION)
+                    ? meshAttributes[SemanticProperties.POSITION].AccessorContent.AsVertices.ToUnityVector3Raw()
+                    : null,
+                normals = primitive.Attributes.ContainsKey(SemanticProperties.NORMAL)
+                    ? meshAttributes[SemanticProperties.NORMAL].AccessorContent.AsNormals.ToUnityVector3Raw()
+                    : null,
 
                 uv = primitive.Attributes.ContainsKey(SemanticProperties.TexCoord(0))
                     ? meshAttributes[SemanticProperties.TexCoord(0)].AccessorContent.AsTexcoords.ToUnityVector2Raw()
@@ -1167,12 +1088,11 @@ namespace UnityGLTF
             yield return null;
         }
 
-        protected virtual void ConstructMaterial(GLTF.Schema.Material def, int materialIndex)
+        protected virtual IEnumerator ConstructMaterial(GLTF.Schema.Material def, int materialIndex)
         {
             IUniformMap mapper;
-            const string specGlossExtName = KHR_materials_pbrSpecularGlossinessExtensionFactory.EXTENSION_NAME;
-            if (_gltfRoot.ExtensionsUsed != null && _gltfRoot.ExtensionsUsed.Contains(specGlossExtName)
-                && def.Extensions != null && def.Extensions.ContainsKey(specGlossExtName))
+            string specGlossExtName = KHR_materials_pbrSpecularGlossinessExtensionFactory.EXTENSION_NAME;
+            if (TryGetExtension(def, specGlossExtName) != null)
             {
                 if (!string.IsNullOrEmpty(CustomShaderName))
                 {
@@ -1208,6 +1128,11 @@ namespace UnityGLTF
                 if (pbr.BaseColorTexture != null)
                 {
                     int textureId = pbr.BaseColorTexture.Index.Id;
+                    if (_assetCache.TextureCache[textureId] == null || _assetCache.TextureCache[textureId].Texture == null)
+                    {
+                        yield return ConstructTexture(textureId, true, false);
+                        FlipTextureIfDds(textureId, mrMapper.Material, mrMapper.BaseColorTextureID);
+                    }
                     mrMapper.BaseColorTexture = _assetCache.TextureCache[textureId].Texture;
                     mrMapper.BaseColorTexCoord = pbr.BaseColorTexture.TexCoord;
 
@@ -1219,6 +1144,11 @@ namespace UnityGLTF
                 if (pbr.MetallicRoughnessTexture != null)
                 {
                     int textureId = pbr.MetallicRoughnessTexture.Index.Id;
+                    if (_assetCache.TextureCache[textureId] == null || _assetCache.TextureCache[textureId].Texture == null)
+                    {
+                        yield return ConstructTexture(textureId, true, false);
+                        FlipTextureIfDds(textureId, mrMapper.Material, mrMapper.MetallicRoughnessTextureID);
+                    }
                     mrMapper.MetallicRoughnessTexture = _assetCache.TextureCache[textureId].Texture;
                     mrMapper.MetallicRoughnessTexCoord = pbr.MetallicRoughnessTexture.TexCoord;
 
@@ -1238,6 +1168,12 @@ namespace UnityGLTF
                 if (specGloss.DiffuseTexture != null)
                 {
                     int textureId = specGloss.DiffuseTexture.Index.Id;
+                    if (_assetCache.TextureCache[textureId] == null || _assetCache.TextureCache[textureId].Texture == null)
+                    {
+                        yield return ConstructTexture(textureId, true, false);
+                        FlipTextureIfDds(textureId, sgMapper.Material, sgMapper.DiffuseTextureID);
+                    }
+
                     sgMapper.DiffuseTexture = _assetCache.TextureCache[textureId].Texture;
                     sgMapper.DiffuseTexCoord = specGloss.DiffuseTexture.TexCoord;
 
@@ -1250,6 +1186,12 @@ namespace UnityGLTF
                 if (specGloss.SpecularGlossinessTexture != null)
                 {
                     int textureId = specGloss.SpecularGlossinessTexture.Index.Id;
+                    if (_assetCache.TextureCache[textureId] == null || _assetCache.TextureCache[textureId].Texture == null)
+                    {
+                        // TODO: jcopic - This texture should be loaded RGB in sRGB space and A in linear space.
+                        yield return ConstructTexture(textureId, true, false);
+                        FlipTextureIfDds(textureId, sgMapper.Material, sgMapper.SpecularGlossinessTextureID);
+                    }
                     sgMapper.SpecularGlossinessTexture = _assetCache.TextureCache[textureId].Texture;
                 }
             }
@@ -1257,6 +1199,11 @@ namespace UnityGLTF
             if (def.NormalTexture != null)
             {
                 int textureId = def.NormalTexture.Index.Id;
+                if (_assetCache.TextureCache[textureId] == null || _assetCache.TextureCache[textureId].Texture == null)
+                {
+                    yield return ConstructTexture(textureId, true, false);
+                    FlipTextureIfDds(textureId, mapper.Material, mapper.NormalTextureID);
+                }
                 mapper.NormalTexture = _assetCache.TextureCache[textureId].Texture;
                 mapper.NormalTexCoord = def.NormalTexture.TexCoord;
                 mapper.NormalTexScale = def.NormalTexture.Scale;
@@ -1266,12 +1213,22 @@ namespace UnityGLTF
             {
                 mapper.OcclusionTexStrength = def.OcclusionTexture.Strength;
                 int textureId = def.OcclusionTexture.Index.Id;
+                if (_assetCache.TextureCache[textureId] == null || _assetCache.TextureCache[textureId].Texture == null)
+                {
+                    yield return ConstructTexture(textureId, true, false);
+                    FlipTextureIfDds(textureId, mapper.Material, mapper.OcclusionTextureID);
+                }
                 mapper.OcclusionTexture = _assetCache.TextureCache[textureId].Texture;
             }
 
             if (def.EmissiveTexture != null)
             {
                 int textureId = def.EmissiveTexture.Index.Id;
+                if (_assetCache.TextureCache[textureId] == null || _assetCache.TextureCache[textureId].Texture == null)
+                {
+                    yield return ConstructTexture(textureId, true, false);
+                    FlipTextureIfDds(textureId, mapper.Material, mapper.EmissiveTextureID);
+                }
                 mapper.EmissiveTexture = _assetCache.TextureCache[textureId].Texture;
                 mapper.EmissiveTexCoord = def.EmissiveTexture.TexCoord;
             }
@@ -1326,8 +1283,7 @@ namespace UnityGLTF
                 {
                     InitializeAssetCache();
                 }
-                yield return ConstructImageBuffer(texture, GetTextureSourceId(texture));
-                yield return ConstructTexture(texture, textureIndex, markGpuOnly);
+                yield return ConstructTexture(textureIndex, markGpuOnly);
             }
             finally
             {
@@ -1358,14 +1314,20 @@ namespace UnityGLTF
             return _assetCache.TextureCache[textureIndex].Texture;
         }
 
-        protected virtual IEnumerator ConstructTexture(GLTF.Schema.Texture texture, int textureIndex,
-            bool markGpuOnly = true)
+        protected virtual IEnumerator ConstructTexture(int textureIndex, bool markGpuOnly = true, bool useLinear = true)
         {
+            GLTF.Schema.Texture texture = _gltfRoot.Textures[textureIndex];
+            if (_assetCache.TextureCache[textureIndex] == null)
+            {
+                yield return ConstructImageBuffer(texture, textureIndex);
+            }
+
             if (_assetCache.TextureCache[textureIndex].Texture == null)
             {
                 int sourceId = GetTextureSourceId(texture);
                 GLTF.Schema.Image image = _gltfRoot.Images[sourceId];
-                yield return ConstructImage(image, sourceId, markGpuOnly);
+
+                yield return ConstructImage(image, sourceId, markGpuOnly, useLinear);
 
                 var source = _assetCache.ImageCache[sourceId];
                 var desiredFilterMode = FilterMode.Bilinear;
@@ -1414,9 +1376,9 @@ namespace UnityGLTF
             }
         }
 
-        protected virtual IEnumerator ConstructImageFromGLB(Image image, int imageCacheIndex)
+        protected virtual IEnumerator ConstructImageFromGLB(Image image, int imageCacheIndex, bool useLinear = true)
         {
-            var texture = new Texture2D(0, 0);
+            var texture = new Texture2D(0, 0, TextureFormat.RGBA32, true, useLinear);
             var bufferView = image.BufferView.Value;
             var data = new byte[bufferView.ByteLength];
 
@@ -1441,11 +1403,9 @@ namespace UnityGLTF
 
         protected virtual void ApplyTextureTransform(TextureInfo def, UnityEngine.Material mat, string texName)
         {
-            IExtension extension;
-            if (_gltfRoot.ExtensionsUsed != null &&
-                _gltfRoot.ExtensionsUsed.Contains(ExtTextureTransformExtensionFactory.EXTENSION_NAME) &&
-                def.Extensions != null &&
-                def.Extensions.TryGetValue(ExtTextureTransformExtensionFactory.EXTENSION_NAME, out extension))
+            IExtension extension = TryGetExtension(def, ExtTextureTransformExtensionFactory.EXTENSION_NAME);
+
+            if (extension != null)
             {
                 ExtTextureTransformExtension ext = (ExtTextureTransformExtension)extension;
 
@@ -1480,6 +1440,96 @@ namespace UnityGLTF
             var lastIndex = gltfPath.IndexOf(fileName);
             var partialPath = gltfPath.Substring(0, lastIndex);
             return partialPath;
+        }
+
+        private IExtension TryGetExtension(GLTFProperty property, string extensionName)
+        {
+            IExtension extension = null;
+            if (_gltfRoot.ExtensionsUsed != null &&
+                _gltfRoot.ExtensionsUsed.Contains(extensionName) &&
+                property.Extensions != null)
+            {
+                property.Extensions.TryGetValue(extensionName, out extension);
+            }
+
+            return extension;
+        }
+
+        // load texture variation for bc7 dds: https://msdn.microsoft.com/en-us/library/windows/desktop/bb943991(v=vs.85).aspx#dds_variants 
+        protected IEnumerator ConstructUnityDDSTexture(Stream stream, bool markGpuOnly, GLTF.Schema.Image image, int imageCacheIndex, bool useLinear = true)
+        {
+            bool isDds = IsDds(image);
+            if (!isDds)
+            {
+                throw new GLTFLoadException("Tried to load a texture as .dds that was not a .dds file.");
+            }
+
+            Texture2D texture;
+            byte[] buffer;
+            using (stream)
+            {
+                if (stream.Length > int.MaxValue)
+                {
+                    throw new Exception("Stream is larger than can be copied into byte array");
+                }
+
+                // header size of dx header + dx10 header is 148
+                int DDS_HEADER_SIZE = 148;
+
+                byte[] ddsBytes = new byte[stream.Length];
+                stream.Read(ddsBytes, 0, DDS_HEADER_SIZE);
+                yield return null;
+
+                byte ddsSizeCheck = ddsBytes[4];
+                if (ddsSizeCheck != 124)    // 124 is the dds header size for intiial header. A todo may be to add a check for the second header
+                {
+                    throw new Exception("Invalid DDS DXTn texture. Unable to read"); //this header byte should be 124 for DDS image files
+                }
+
+                int height = ddsBytes[13] * 256 + ddsBytes[12];
+                int width = ddsBytes[17] * 256 + ddsBytes[16];
+                int mipMapCount = ddsBytes[28];
+
+
+                texture = new Texture2D(width, height, TextureFormat.BC7, mipMapCount > 1, useLinear);
+
+                int sizeToRead = ddsBytes.Length - DDS_HEADER_SIZE;
+                buffer = new byte[sizeToRead];
+                stream.Read(buffer, 0, sizeToRead);
+                yield return null;
+            }
+
+            texture.LoadRawTextureData(buffer);
+            yield return null;
+
+            // After we conduct the Apply(), then we can make the texture non-readable and never create a CPU copy
+            texture.Apply(false, markGpuOnly);
+
+            yield return null;
+            _assetCache.ImageCache[imageCacheIndex] = texture;
+        }
+
+        public static bool IsDds(GLTF.Schema.Image image)
+        {
+            const string DdsExtension = ".dds";
+            return image != null &&
+                ((image.Uri != null && image.Uri.EndsWith(DdsExtension)) ||
+                (image.MimeType != null && image.MimeType.EndsWith(DdsExtension)));
+        }
+
+        private void FlipTextureIfDds(int textureIndex, UnityEngine.Material material, int texturePropertyID)
+        {
+            GLTF.Schema.Texture texture = _gltfRoot.Textures[textureIndex];
+            IExtension textureDDSExtension = TryGetExtension(texture, GLTF.Schema.MSFT_texture_dds.EXTENSION_NAME);
+            if (textureDDSExtension != null)
+            {
+                MSFT_texture_dds msftTextureDdsExtension = textureDDSExtension as MSFT_texture_dds;
+                if (msftTextureDdsExtension != null &&
+                    IsDds(_gltfRoot.Images[msftTextureDdsExtension.DdsImageIndex.Id]))
+                {
+                    material.SetTextureScale(texturePropertyID, new Vector2(1, -1));
+                }
+            }
         }
 
         /// <summary>

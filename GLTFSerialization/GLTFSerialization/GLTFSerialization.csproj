@@ -79,6 +79,10 @@
     <Compile Include="Exceptions.cs" />
     <Compile Include="Extensions\ExtTextureTransformExtension.cs" />
     <Compile Include="Extensions\ExtTextureTransformExtensionFactory.cs" />
+    <Compile Include="Extensions\MSFT_packing_normalRoughnessMetallic.cs" />
+    <Compile Include="Extensions\MSFT_packing_normalRoughnessMetallic_factory.cs" />
+    <Compile Include="Extensions\MSFT_texture_dds.cs" />
+    <Compile Include="Extensions\MSTF_texture_dds_factory.cs" />
     <Compile Include="GLTFHelpers.cs" />
     <Compile Include="GLTFParser.cs" />
     <Compile Include="Math\Matrix4x4.cs" />
